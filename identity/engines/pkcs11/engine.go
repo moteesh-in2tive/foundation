@@ -26,7 +26,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/michaelquigley/pfxlog"
-	"github.com/miekg/pkcs11"
+	miekg_pkcs11 "github.com/miekg/pkcs11"
 	"io"
 	"math/big"
 	"net/url"
@@ -47,15 +47,15 @@ var Engine = &engine{}
 type engine struct {
 }
 
-var contexts = map[string]*pkcs11.Ctx{}
+var contexts = map[string]*miekg_pkcs11.Ctx{}
 
 var log = pfxlog.ContextLogger(EngineId)
 
 type p11Signer struct {
-	c     *pkcs11.Ctx
-	s     pkcs11.SessionHandle
-	h     pkcs11.ObjectHandle
-	m     *pkcs11.Mechanism
+	c     *miekg_pkcs11.Ctx
+	s     miekg_pkcs11.SessionHandle
+	h     miekg_pkcs11.ObjectHandle
+	m     *miekg_pkcs11.Mechanism
 	label string
 
 	pub crypto.PublicKey
@@ -80,14 +80,14 @@ var hashInfo = map[crypto.Hash]struct {
 	mgf  uint
 	hash uint
 }{
-	crypto.MD5:       {[]byte{0x30, 0x20, 0x30, 0x0c, 0x06, 0x08, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x05, 0x05, 0x00, 0x04, 0x10}, 0, pkcs11.CKM_MD5},
-	crypto.SHA1:      {[]byte{0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14}, pkcs11.CKG_MGF1_SHA1, pkcs11.CKM_SHA_1},
-	crypto.SHA224:    {[]byte{0x30, 0x2d, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x04, 0x05, 0x00, 0x04, 0x1c}, pkcs11.CKG_MGF1_SHA224, pkcs11.CKM_SHA224},
-	crypto.SHA256:    {[]byte{0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20}, pkcs11.CKG_MGF1_SHA256, pkcs11.CKM_SHA256},
-	crypto.SHA384:    {[]byte{0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30}, pkcs11.CKG_MGF1_SHA384, pkcs11.CKM_SHA384},
-	crypto.SHA512:    {[]byte{0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40}, pkcs11.CKG_MGF1_SHA512, pkcs11.CKM_SHA512},
+	crypto.MD5:       {[]byte{0x30, 0x20, 0x30, 0x0c, 0x06, 0x08, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x05, 0x05, 0x00, 0x04, 0x10}, 0, miekg_pkcs11.CKM_MD5},
+	crypto.SHA1:      {[]byte{0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14}, miekg_pkcs11.CKG_MGF1_SHA1, miekg_pkcs11.CKM_SHA_1},
+	crypto.SHA224:    {[]byte{0x30, 0x2d, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x04, 0x05, 0x00, 0x04, 0x1c}, miekg_pkcs11.CKG_MGF1_SHA224, miekg_pkcs11.CKM_SHA224},
+	crypto.SHA256:    {[]byte{0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20}, miekg_pkcs11.CKG_MGF1_SHA256, miekg_pkcs11.CKM_SHA256},
+	crypto.SHA384:    {[]byte{0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30}, miekg_pkcs11.CKG_MGF1_SHA384, miekg_pkcs11.CKM_SHA384},
+	crypto.SHA512:    {[]byte{0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40}, miekg_pkcs11.CKG_MGF1_SHA512, miekg_pkcs11.CKM_SHA512},
 	crypto.MD5SHA1:   {[]byte{}, 0, 0}, // A special TLS case which doesn't use an ASN1 prefix.
-	crypto.RIPEMD160: {[]byte{0x30, 0x20, 0x30, 0x08, 0x06, 0x06, 0x28, 0xcf, 0x06, 0x03, 0x00, 0x31, 0x04, 0x14}, 0, pkcs11.CKM_RIPEMD160},
+	crypto.RIPEMD160: {[]byte{0x30, 0x20, 0x30, 0x08, 0x06, 0x06, 0x28, 0xcf, 0x06, 0x03, 0x00, 0x31, 0x04, 0x14}, 0, miekg_pkcs11.CKM_RIPEMD160},
 }
 
 func (k *p11Signer) signRSA(digest []byte, opts crypto.SignerOpts) ([]byte, error) {
@@ -109,8 +109,8 @@ func (k *p11Signer) signRSA(digest []byte, opts crypto.SignerOpts) ([]byte, erro
 			pssOptions.SaltLength = hash.Size()
 		}
 
-		params := pkcs11.NewPSSParams(hashInfo.hash, hashInfo.mgf, uint(pssOptions.SaltLength))
-		mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_PSS, params)}
+		params := miekg_pkcs11.NewPSSParams(hashInfo.hash, hashInfo.mgf, uint(pssOptions.SaltLength))
+		mech := []*miekg_pkcs11.Mechanism{miekg_pkcs11.NewMechanism(miekg_pkcs11.CKM_RSA_PKCS_PSS, params)}
 
 		if err := k.c.SignInit(k.s, mech, k.h); err == nil {
 			return k.c.Sign(k.s, digest)
@@ -121,7 +121,7 @@ func (k *p11Signer) signRSA(digest []byte, opts crypto.SignerOpts) ([]byte, erro
 		hash := opts.HashFunc()
 		hashInfo := hashInfo[hash]
 		input := append(hashInfo.oid, digest...)
-		mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS, nil)}
+		mech := []*miekg_pkcs11.Mechanism{miekg_pkcs11.NewMechanism(miekg_pkcs11.CKM_RSA_PKCS, nil)}
 		if err := k.c.SignInit(k.s, mech, k.h); err == nil {
 			return k.c.Sign(k.s, input)
 		} else {
@@ -132,7 +132,7 @@ func (k *p11Signer) signRSA(digest []byte, opts crypto.SignerOpts) ([]byte, erro
 
 func (k *p11Signer) signECDSA(digest []byte) ([]byte, error) {
 
-	mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_ECDSA, nil)}
+	mech := []*miekg_pkcs11.Mechanism{miekg_pkcs11.NewMechanism(miekg_pkcs11.CKM_ECDSA, nil)}
 	if err := k.c.SignInit(k.s, mech, k.h); err != nil {
 		return nil, err
 	}
@@ -198,14 +198,14 @@ func (*engine) LoadKey(key *url.URL) (crypto.PrivateKey, error) {
 		log.Debugf("using slot id: %d", slotId)
 	}
 
-	session, err := ctx.OpenSession(slotId, pkcs11.CKF_SERIAL_SESSION|pkcs11.CKF_RW_SESSION)
+	session, err := ctx.OpenSession(slotId, miekg_pkcs11.CKF_SERIAL_SESSION|miekg_pkcs11.CKF_RW_SESSION)
 	if err != nil {
 		return nil, err
 	}
 	pin := opts.Get("pin")
 	if pin != "" {
-		err = ctx.Login(session, pkcs11.CKU_USER, pin)
-		if err != nil && err != pkcs11.Error(pkcs11.CKR_USER_ALREADY_LOGGED_IN) {
+		err = ctx.Login(session, miekg_pkcs11.CKU_USER, pin)
+		if err != nil && err != miekg_pkcs11.Error(miekg_pkcs11.CKR_USER_ALREADY_LOGGED_IN) {
 			return nil, err
 		}
 	}
@@ -220,43 +220,43 @@ func (*engine) LoadKey(key *url.URL) (crypto.PrivateKey, error) {
 		id = []byte{0}
 	}
 
-	keyHandle, err := findHandle(ctx, session, pkcs11.CKO_PRIVATE_KEY, id)
+	keyHandle, err := findHandle(ctx, session, miekg_pkcs11.CKO_PRIVATE_KEY, id)
 	if err != nil {
 		return nil, err
 	}
 
-	pubHandle, err := findHandle(ctx, session, pkcs11.CKO_PUBLIC_KEY, id)
+	pubHandle, err := findHandle(ctx, session, miekg_pkcs11.CKO_PUBLIC_KEY, id)
 	if err != nil {
 		return nil, err
 	}
 
-	keyType, err := getObjectUintAttr(ctx, session, keyHandle, pkcs11.CKA_KEY_TYPE)
+	keyType, err := getObjectUintAttr(ctx, session, keyHandle, miekg_pkcs11.CKA_KEY_TYPE)
 	if err != nil {
 		return nil, err
 	}
 
-	mechId, err := getObjectUintAttr(ctx, session, keyHandle, pkcs11.CKA_ALLOWED_MECHANISMS)
-	if err != nil && err != pkcs11.Error(pkcs11.CKR_ATTRIBUTE_TYPE_INVALID) {
+	mechId, err := getObjectUintAttr(ctx, session, keyHandle, miekg_pkcs11.CKA_ALLOWED_MECHANISMS)
+	if err != nil && err != miekg_pkcs11.Error(miekg_pkcs11.CKR_ATTRIBUTE_TYPE_INVALID) {
 		return nil, err
 	}
 	log.WithField("sign mechanism", mechId).Debug("found signing mechanism")
 
 	var pubKey crypto.PublicKey
-	var signMech *pkcs11.Mechanism
+	var signMech *miekg_pkcs11.Mechanism
 	switch keyType {
-	case pkcs11.CKK_ECDSA:
+	case miekg_pkcs11.CKK_ECDSA:
 		pubKey, err = loadECDSApub(ctx, session, pubHandle)
 		signMech, err = getECDSAmechanism(ctx, slotId, pubKey.(*ecdsa.PublicKey))
 
-	case pkcs11.CKK_RSA:
-		signMech = pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS, nil)
+	case miekg_pkcs11.CKK_RSA:
+		signMech = miekg_pkcs11.NewMechanism(miekg_pkcs11.CKM_RSA_PKCS, nil)
 		pubKey, err = loadRSApub(ctx, session, pubHandle)
 	default:
 		return nil, fmt.Errorf("unsupported key type (%d)", keyType)
 	}
 
 	signer := &p11Signer{c: ctx, s: session, h: keyHandle, m: signMech, pub: pubKey}
-	signer.label, _ = getObjectStringAttr(ctx, session, keyHandle, pkcs11.CKA_LABEL)
+	signer.label, _ = getObjectStringAttr(ctx, session, keyHandle, miekg_pkcs11.CKA_LABEL)
 
 	return signer, nil
 }
@@ -265,12 +265,12 @@ func (*engine) Id() string {
 	return EngineId
 }
 
-func getContext(driver string) (*pkcs11.Ctx, error) {
+func getContext(driver string) (*miekg_pkcs11.Ctx, error) {
 	if ctx, ok := contexts[driver]; ok {
 		return ctx, nil
 	}
 
-	ctx := pkcs11.New(driver)
+	ctx := miekg_pkcs11.New(driver)
 	err := ctx.Initialize()
 	if err != nil {
 		return nil, err
@@ -287,30 +287,30 @@ var oid2curve = map[string]elliptic.Curve{
 	"1.3.132.0.35":        elliptic.P521(),
 }
 
-func getECDSAmechanism(ctx *pkcs11.Ctx, slot uint, pubKey *ecdsa.PublicKey) (*pkcs11.Mechanism, error) {
+func getECDSAmechanism(ctx *miekg_pkcs11.Ctx, slot uint, pubKey *ecdsa.PublicKey) (*miekg_pkcs11.Mechanism, error) {
 
 	var signMech uint
 	switch pubKey.Curve.Params().BitSize {
 	case 512:
-		signMech = pkcs11.CKM_ECDSA_SHA512
+		signMech = miekg_pkcs11.CKM_ECDSA_SHA512
 	case 384:
-		signMech = pkcs11.CKM_ECDSA_SHA384
+		signMech = miekg_pkcs11.CKM_ECDSA_SHA384
 	case 256:
-		signMech = pkcs11.CKM_ECDSA_SHA256
+		signMech = miekg_pkcs11.CKM_ECDSA_SHA256
 	case 224:
-		signMech = pkcs11.CKM_ECDSA_SHA224
+		signMech = miekg_pkcs11.CKM_ECDSA_SHA224
 	default:
 		return nil, fmt.Errorf("unexpected key size curve(%s)", pubKey.Curve.Params().Name)
 	}
 
 	prefered := []uint{
 		signMech,
-		pkcs11.CKM_ECDSA, // fallback -- softhsm only reports this mechanism as available
+		miekg_pkcs11.CKM_ECDSA, // fallback -- softhsm only reports this mechanism as available
 	}
 
 	for _, m := range prefered {
-		mech := []*pkcs11.Mechanism{
-			pkcs11.NewMechanism(m, nil),
+		mech := []*miekg_pkcs11.Mechanism{
+			miekg_pkcs11.NewMechanism(m, nil),
 		}
 
 		_, err := ctx.GetMechanismInfo(slot, mech)
@@ -324,10 +324,10 @@ func getECDSAmechanism(ctx *pkcs11.Ctx, slot uint, pubKey *ecdsa.PublicKey) (*pk
 	return nil, fmt.Errorf("token does not support ECDSA sign mechanisms")
 }
 
-func loadECDSApub(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, ph pkcs11.ObjectHandle) (*ecdsa.PublicKey, error) {
-	templ := []*pkcs11.Attribute{
-		{Type: pkcs11.CKA_EC_PARAMS},
-		{Type: pkcs11.CKA_EC_POINT},
+func loadECDSApub(ctx *miekg_pkcs11.Ctx, session miekg_pkcs11.SessionHandle, ph miekg_pkcs11.ObjectHandle) (*ecdsa.PublicKey, error) {
+	templ := []*miekg_pkcs11.Attribute{
+		{Type: miekg_pkcs11.CKA_EC_PARAMS},
+		{Type: miekg_pkcs11.CKA_EC_POINT},
 	}
 	if attrs, err := ctx.GetAttributeValue(session, ph, templ); err != nil {
 		return nil, err
@@ -360,10 +360,10 @@ func loadECDSApub(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, ph pkcs11.Objec
 	}
 }
 
-func loadRSApub(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, ph pkcs11.ObjectHandle) (crypto.PublicKey, error) {
-	templ := []*pkcs11.Attribute{
-		{Type: pkcs11.CKA_MODULUS},
-		{Type: pkcs11.CKA_PUBLIC_EXPONENT},
+func loadRSApub(ctx *miekg_pkcs11.Ctx, session miekg_pkcs11.SessionHandle, ph miekg_pkcs11.ObjectHandle) (crypto.PublicKey, error) {
+	templ := []*miekg_pkcs11.Attribute{
+		{Type: miekg_pkcs11.CKA_MODULUS},
+		{Type: miekg_pkcs11.CKA_PUBLIC_EXPONENT},
 	}
 	if attrs, err := ctx.GetAttributeValue(session, ph, templ); err != nil {
 		return nil, err
@@ -386,13 +386,13 @@ func loadRSApub(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, ph pkcs11.ObjectH
 	}
 }
 
-func findHandle(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, cls uint, id []byte) (pkcs11.ObjectHandle, error) {
+func findHandle(ctx *miekg_pkcs11.Ctx, session miekg_pkcs11.SessionHandle, cls uint, id []byte) (miekg_pkcs11.ObjectHandle, error) {
 	// find the key
-	query := make([]*pkcs11.Attribute, 1)
-	query[0] = pkcs11.NewAttribute(pkcs11.CKA_CLASS, cls)
+	query := make([]*miekg_pkcs11.Attribute, 1)
+	query[0] = miekg_pkcs11.NewAttribute(miekg_pkcs11.CKA_CLASS, cls)
 
 	if id != nil {
-		query = append(query, pkcs11.NewAttribute(pkcs11.CKA_ID, id))
+		query = append(query, miekg_pkcs11.NewAttribute(miekg_pkcs11.CKA_ID, id))
 	}
 
 	err := ctx.FindObjectsInit(session, query)
@@ -415,23 +415,23 @@ func findHandle(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, cls uint, id []by
 	return objs[0], nil
 }
 
-func getObjectStringAttr(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, obj pkcs11.ObjectHandle, attr_id uint) (string, error) {
+func getObjectStringAttr(ctx *miekg_pkcs11.Ctx, session miekg_pkcs11.SessionHandle, obj miekg_pkcs11.ObjectHandle, attr_id uint) (string, error) {
 	v, err := getObjectAttribute(ctx, session, obj, attr_id)
 	return string(v), err
 }
 
-func getObjectUintAttr(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, obj pkcs11.ObjectHandle, attr_id uint) (uint, error) {
+func getObjectUintAttr(ctx *miekg_pkcs11.Ctx, session miekg_pkcs11.SessionHandle, obj miekg_pkcs11.ObjectHandle, attr_id uint) (uint, error) {
 	v, err := getObjectAttribute(ctx, session, obj, attr_id)
 	u, _ := binary.Uvarint(v)
 	return uint(u), err
 }
 
-func getObjectAttribute(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, obj pkcs11.ObjectHandle, attr_id uint) ([]byte, error) {
-	templ := []*pkcs11.Attribute{
+func getObjectAttribute(ctx *miekg_pkcs11.Ctx, session miekg_pkcs11.SessionHandle, obj miekg_pkcs11.ObjectHandle, attr_id uint) ([]byte, error) {
+	templ := []*miekg_pkcs11.Attribute{
 		{Type: attr_id},
 	}
 	attrs, err := ctx.GetAttributeValue(session, obj, templ)
-	if err == pkcs11.Error(pkcs11.CKR_ATTRIBUTE_TYPE_INVALID) {
+	if err == miekg_pkcs11.Error(miekg_pkcs11.CKR_ATTRIBUTE_TYPE_INVALID) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
